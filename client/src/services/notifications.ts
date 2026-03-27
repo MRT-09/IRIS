@@ -1,51 +1,138 @@
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { Platform } from 'react-native';
+import { Alert, Platform } from 'react-native';
 
 /**
- * expo-notifications' push-token auto-registration crashes in Expo Go (SDK 53+).
- * We only need *local* notifications, so we skip the import entirely in Expo Go
- * and load the module lazily in dev-build / production.
+ * We only need local notifications, so the module is loaded lazily and push-token
+ * auto-registration is disabled when Expo Go is detected.
  */
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const detectionChannelId = 'detections';
 
-if (!isExpoGo && Platform.OS !== 'web') {
-  // Configure how incoming notifications are displayed while the app is foregrounded.
-  // This runs once at module load time in dev-build / production builds only.
-  import('expo-notifications').then(({ setNotificationHandler }) => {
-    setNotificationHandler({
+type NotificationsModule = typeof import('expo-notifications');
+
+let notificationsModulePromise: Promise<NotificationsModule | null> | null = null;
+let initialized = false;
+let permissionGranted = false;
+
+function showDetectionAlert(body: string): void {
+  Alert.alert('IRIS - Person Detected', body);
+}
+
+async function getNotificationsModule(): Promise<NotificationsModule | null> {
+  if (Platform.OS === 'web') return null;
+
+  if (!notificationsModulePromise) {
+    notificationsModulePromise = import('expo-notifications').catch(() => null);
+  }
+
+  return notificationsModulePromise;
+}
+
+export async function initializeNotifications(): Promise<boolean> {
+  if (initialized) return permissionGranted;
+
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    initialized = true;
+    permissionGranted = false;
+    return false;
+  }
+
+  try {
+    if (isExpoGo && Notifications.setAutoServerRegistrationEnabledAsync) {
+      await Notifications.setAutoServerRegistrationEnabledAsync(false);
+    }
+
+    Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowAlert: true,
-        shouldPlaySound: false,
+        shouldPlaySound: true,
         shouldSetBadge: false,
         shouldShowBanner: true,
         shouldShowList: true,
       }),
     });
-  });
-}
 
-export async function requestPermissions(): Promise<boolean> {
-  if (Platform.OS === 'web' || isExpoGo) return false;
-  try {
-    const { requestPermissionsAsync } = await import('expo-notifications');
-    const { status } = await requestPermissionsAsync();
-    return status === 'granted';
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(detectionChannelId, {
+        name: 'Detections',
+        description: 'IRIS person detection alerts',
+        importance: Notifications.AndroidImportance.MAX,
+        enableVibrate: true,
+        showBadge: false,
+        vibrationPattern: [0, 250, 150, 250],
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        sound: 'default',
+      });
+    }
+
+    const permissions = await Notifications.getPermissionsAsync();
+    permissionGranted = permissions.granted || permissions.status === 'granted';
+    initialized = true;
+    return permissionGranted;
   } catch {
+    initialized = true;
+    permissionGranted = false;
     return false;
   }
 }
 
-export async function sendDetectionNotification(names: string[]): Promise<void> {
-  if (Platform.OS === 'web' || isExpoGo) return;
+export async function requestPermissions(): Promise<boolean> {
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    permissionGranted = false;
+    return false;
+  }
+
+  await initializeNotifications();
+
+  if (permissionGranted) return true;
+
+  try {
+    const permissions = await Notifications.requestPermissionsAsync();
+    permissionGranted = permissions.granted || permissions.status === 'granted';
+    return permissionGranted;
+  } catch {
+    permissionGranted = false;
+    return false;
+  }
+}
+
+export async function sendDetectionNotification(names: string[]): Promise<boolean> {
+  if (names.length === 0) return false;
+
   const body =
     names.length === 1 ? `${names[0]} detected` : `Detected: ${names.join(', ')}`;
+
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    showDetectionAlert(body);
+    return false;
+  }
+
   try {
-    const { scheduleNotificationAsync } = await import('expo-notifications');
-    await scheduleNotificationAsync({
-      content: { title: 'IRIS — Person Detected', body },
-      trigger: null,
+    await initializeNotifications();
+    if (!permissionGranted) {
+      permissionGranted = await requestPermissions();
+    }
+
+    if (!permissionGranted) {
+      showDetectionAlert(body);
+      return false;
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'IRIS - Person Detected',
+        body,
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+      },
+      trigger: Platform.OS === 'android' ? { channelId: detectionChannelId } : null,
     });
+    return true;
   } catch {
-    // Silently ignore — TTS is the primary output channel
+    showDetectionAlert(body);
+    return false;
   }
 }

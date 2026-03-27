@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, Image, useWindowDimensions } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, Image, useWindowDimensions } from 'react-native';
 
 import { Colors, Space, Radius, Type, Shadow } from '@/constants/theme';
 import { useAppTheme } from '@/src/store/theme';
 import { apiService } from '@/src/services/api';
 import { isBluetoothAudioConnected } from '@/src/services/bluetooth';
-import { speak } from '@/src/services/tts';
+import { speak, stopSpeaking } from '@/src/services/tts';
 import { sendDetectionNotification } from '@/src/services/notifications';
 import { getSettings } from '@/src/store/settings';
 import type { DetectionEvent } from '@/src/types';
@@ -22,8 +22,9 @@ export default function HomeScreen() {
   const c = Colors[colorScheme ?? 'light'];
   const { width } = useWindowDimensions();
 
-  const [connected, setConnected]   = useState(false);
-  const [detections, setDetections] = useState<DetectionLog[]>([]);
+  const [connected, setConnected]         = useState(false);
+  const [currentDetection, setCurrentDetection] = useState<DetectionLog | null>(null);
+  const [recentDetections, setRecentDetections] = useState<DetectionLog[]>([]);
   const detectionIdRef              = useRef(0);
   // Double-buffered frame display: displayedFrame is always visible,
   // nextFrame loads silently off-screen and swaps in only on onLoad.
@@ -34,6 +35,11 @@ export default function HomeScreen() {
   const pollTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null);
   const clearTimerRef                       = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Per-contact cooldown: name → timestamp of last announcement
+  const cooldownRef                         = useRef<Map<string, number>>(new Map());
+
+  const COOLDOWN_MS  = 60 * 60 * 1000; // 1 hour — announcement cooldown
+  const PRESENCE_MS  = 4000;           // clear display 4s after last detection
 
   const handleDetection = useCallback(async (event: DetectionEvent) => {
     const names = event.contacts.map((ct) => ct.name);
@@ -41,19 +47,53 @@ export default function HomeScreen() {
       event.contacts.reduce((sum, ct) => sum + ct.confidence, 0) / event.contacts.length;
 
     const id = String(++detectionIdRef.current);
+    const entry: DetectionLog = { id, names, timestamp: event.timestamp, confidence: avgConf };
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-    setDetections([{ id, names, timestamp: event.timestamp, confidence: avgConf }]);
-    clearTimerRef.current = setTimeout(() => setDetections([]), 60 * 60 * 1000);
+    setCurrentDetection((prev) => {
+      if (prev) setRecentDetections((r) => [prev, ...r].slice(0, 3));
+      return entry;
+    });
+    clearTimerRef.current = setTimeout(() => setCurrentDetection(null), PRESENCE_MS);
+
+    // Filter to contacts not announced within the last hour
+    const now = Date.now();
+    const cooldownMap = cooldownRef.current;
+    const toAnnounce = names.filter((name) => {
+      const last = cooldownMap.get(name) ?? 0;
+      return now - last >= COOLDOWN_MS;
+    });
+    toAnnounce.forEach((name) => cooldownMap.set(name, now));
+
+    if (toAnnounce.length === 0) return;
+
+    // A new person appeared — reset cooldowns for everyone else
+    const announcing = new Set(toAnnounce);
+    for (const key of cooldownMap.keys()) {
+      if (!announcing.has(key)) cooldownMap.delete(key);
+    }
 
     const settings = await getSettings();
-    let useAudio = settings.outputMode === 'tts';
-    if (settings.outputMode === 'auto') useAudio = await isBluetoothAudioConnected();
+    let useTts = settings.outputMode === 'tts';
+    let useNotification = settings.outputMode === 'notification';
+
+    if (settings.outputMode === 'auto') {
+      const hasHeadphones = await isBluetoothAudioConnected();
+      useTts = hasHeadphones;
+      useNotification = !hasHeadphones;
+    }
 
     const announcement =
-      names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ', then ' + names[names.length - 1];
+      toAnnounce.length === 1 ? toAnnounce[0] : toAnnounce.slice(0, -1).join(', ') + ', then ' + toAnnounce[toAnnounce.length - 1];
 
-    if (useAudio) speak(announcement);
-    else await sendDetectionNotification(names);
+    if (useTts) {
+      speak(announcement);
+      return;
+    }
+
+    if (useNotification) {
+      stopSpeaking();
+      await sendDetectionNotification(names);
+    }
   }, []);
 
   useEffect(() => {
@@ -154,45 +194,63 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* ── Detections ── */}
-      <Text style={[styles.sectionHeading, { color: c.textSub, marginHorizontal: hPad }]}>RECENT DETECTIONS</Text>
+      <ScrollView contentContainerStyle={[styles.listContent, { paddingHorizontal: hPad }]}>
 
-      {detections.length === 0 ? (
-        <View style={styles.emptyWrap}>
-          <Text style={[styles.emptyText, { color: c.textSub }]}>
-            No detections yet.{'\n'}Start the wearable device to begin.
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={detections}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={[styles.listContent, { paddingHorizontal: hPad }]}
-          renderItem={({ item }) => {
-            const conf = Math.round(item.confidence * 100);
-            const barColor = confidenceColor(item.confidence);
-            return (
-              <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }, Shadow.sm]}>
-                <View style={styles.cardTop}>
-                  <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
-                    {item.names.join(', ')}
-                  </Text>
-                  <Text style={[styles.cardTime, { color: c.textSub }]}>
-                    {new Date(item.timestamp).toLocaleTimeString([], {
-                      hour: '2-digit', minute: '2-digit', second: '2-digit',
-                    })}
-                  </Text>
-                </View>
-                {/* Confidence bar */}
-                <View style={[styles.barTrack, { backgroundColor: c.surfaceAlt }]}>
-                  <View style={[styles.barFill, { width: `${conf}%` as any, backgroundColor: barColor }]} />
-                </View>
-                <Text style={[styles.cardConf, { color: barColor }]}>{conf}% confidence</Text>
+        {/* ── Current detection ── */}
+        {currentDetection && <Text style={[styles.sectionHeading, { color: c.textSub }]}>ACTIVE DETECTION</Text>}
+        {currentDetection ? (() => {
+          const conf = Math.round(currentDetection.confidence * 100);
+          const barColor = confidenceColor(currentDetection.confidence);
+          return (
+            <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }, Shadow.sm]}>
+              <View style={styles.cardTop}>
+                <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
+                  {currentDetection.names.join(', ')}
+                </Text>
+                <Text style={[styles.cardTime, { color: c.textSub }]}>
+                  {new Date(currentDetection.timestamp).toLocaleTimeString([], {
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                  })}
+                </Text>
               </View>
-            );
-          }}
-        />
-      )}
+              <View style={[styles.barTrack, { backgroundColor: c.surfaceAlt }]}>
+                <View style={[styles.barFill, { width: `${conf}%` as any, backgroundColor: barColor }]} />
+              </View>
+              <Text style={[styles.cardConf, { color: barColor }]}>{conf}% confidence</Text>
+            </View>
+          );
+        })() : null}
+
+        {/* ── Recent detections ── */}
+        <Text style={[styles.sectionHeading, { color: c.textSub }]}>RECENT DETECTIONS</Text>
+        {recentDetections.length === 0 ? (
+          <Text style={[styles.emptyText, { color: c.textSub }]}>
+            No previous detections.
+          </Text>
+        ) : recentDetections.map((item) => {
+          const conf = Math.round(item.confidence * 100);
+          const barColor = confidenceColor(item.confidence);
+          return (
+            <View key={item.id} style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }, Shadow.sm]}>
+              <View style={styles.cardTop}>
+                <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
+                  {item.names.join(', ')}
+                </Text>
+                <Text style={[styles.cardTime, { color: c.textSub }]}>
+                  {new Date(item.timestamp).toLocaleTimeString([], {
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                  })}
+                </Text>
+              </View>
+              <View style={[styles.barTrack, { backgroundColor: c.surfaceAlt }]}>
+                <View style={[styles.barFill, { width: `${conf}%` as any, backgroundColor: barColor }]} />
+              </View>
+              <Text style={[styles.cardConf, { color: barColor }]}>{conf}% confidence</Text>
+            </View>
+          );
+        })}
+
+      </ScrollView>
     </View>
   );
 }
@@ -239,8 +297,7 @@ const styles = StyleSheet.create({
   },
 
   // Empty
-  emptyWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
-  emptyText: { ...Type.body, textAlign: 'center', lineHeight: 24 },
+  emptyText: { ...Type.body, lineHeight: 24, color: 'transparent' },
 
   // List
   listContent: { paddingBottom: Space.xl },

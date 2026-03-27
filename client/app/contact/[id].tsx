@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -54,6 +54,7 @@ export default function EditContactScreen() {
   const [imageUris, setImageUris]     = useState<string[]>([]);
   const [loading, setLoading]         = useState(true);
   const [syncing, setSyncing]         = useState(false);
+  const submittingRef                 = useRef(false);
 
   useEffect(() => {
     if (!id) return;
@@ -104,7 +105,7 @@ export default function EditContactScreen() {
     setImageUris((prev) => prev.filter((u) => u !== uri));
 
   const handleSubmit = async () => {
-    if (!id) return;
+    if (!id || submittingRef.current) return;
     if (!name.trim()) {
       Alert.alert('Name required', 'Enter a name for this contact.');
       return;
@@ -114,6 +115,7 @@ export default function EditContactScreen() {
       return;
     }
 
+    submittingRef.current = true;
     setSyncing(true);
     try {
       await upsertContact(id, name.trim(), description.trim());
@@ -141,9 +143,8 @@ export default function EditContactScreen() {
         'Sync failed',
         `Could not sync to server: ${e instanceof Error ? e.message : String(e)}`
       );
-      router.back();
-    } finally {
       setSyncing(false);
+      submittingRef.current = false;
     }
   };
 

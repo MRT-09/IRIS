@@ -8,7 +8,7 @@ import { initDatabase } from '@/src/services/database';
 import { getSettings } from '@/src/store/settings';
 import { AppThemeProvider, useAppTheme } from '@/src/store/theme';
 import { apiService } from '@/src/services/api';
-import { requestPermissions } from '@/src/services/notifications';
+import { initializeNotifications, requestPermissions } from '@/src/services/notifications';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -20,6 +20,7 @@ export default function RootLayout() {
       await initDatabase();
       const settings = await getSettings();
       apiService.setSettings(settings);
+      await initializeNotifications();
       await requestPermissions();
     }
     init();
