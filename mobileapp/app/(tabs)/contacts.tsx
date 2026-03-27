@@ -7,31 +7,48 @@ import {
   Alert,
   StyleSheet,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { useRouter, useFocusEffect, useNavigation } from 'expo-router';
 
-import { Colors } from '@/constants/theme';
+import { Colors, Space, Radius, Type, Shadow } from '@/constants/theme';
 import { useAppTheme } from '@/src/store/theme';
 import { getAllContacts, deleteContact } from '@/src/services/database';
 import { apiService } from '@/src/services/api';
 import { getSettings } from '@/src/store/settings';
 import type { Contact } from '@/src/types';
 
+type SortMethod = 'a-z' | 'z-a' | 'latest' | 'earliest';
+const SORT_LABELS: Record<SortMethod, string> = {
+  'a-z': 'A – Z', 'z-a': 'Z – A', latest: 'Latest', earliest: 'Earliest',
+};
+const SORT_CYCLE: SortMethod[] = ['a-z', 'z-a', 'latest', 'earliest'];
+
+// Deterministic accent per name initial
+const AVATAR_COLORS = ['#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#EF4444', '#06B6D4'];
+function avatarColor(name: string) {
+  const i = (name.charCodeAt(0) ?? 65) % AVATAR_COLORS.length;
+  return AVATAR_COLORS[i];
+}
+
 export default function ContactsScreen() {
   const { colorScheme } = useAppTheme();
-  const colors = Colors[colorScheme ?? 'light'];
+  const c = Colors[colorScheme ?? 'light'];
   const isDark = colorScheme === 'dark';
-  const actionBg = isDark ? '#2D7FF9' : colors.tint;
-  const actionFg = '#FFFFFF';
   const router = useRouter();
   const navigation = useNavigation();
+
+  const { width } = useWindowDimensions();
+  const scale = Math.min(Math.max(width / 390, 0.85), 1.25);
+  const avatarSize = Math.round(46 * scale);
+  const fabSize    = Math.round(58 * scale);
+
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [sortMethod, setSortMethod] = useState<'a-z' | 'z-a' | 'latest' | 'earliest'>('a-z');
+  const [loading, setLoading]   = useState(true);
+  const [sort, setSort]         = useState<SortMethod>('a-z');
 
   const fetchContacts = useCallback(async () => {
-    const data = await getAllContacts();
-    setContacts(data);
+    setContacts(await getAllContacts());
   }, []);
 
   useFocusEffect(
@@ -40,23 +57,20 @@ export default function ContactsScreen() {
     }, [fetchContacts])
   );
 
-  const cycleSortMethod = () => {
-    setSortMethod((prev) => {
-      if (prev === 'a-z') return 'z-a';
-      if (prev === 'z-a') return 'latest';
-      if (prev === 'latest') return 'earliest';
-      return 'a-z';
-    });
-  };
+  const cycleSort = () =>
+    setSort((prev) => SORT_CYCLE[(SORT_CYCLE.indexOf(prev) + 1) % SORT_CYCLE.length]);
 
-  const getSortLabel = () => {
-    switch (sortMethod) {
-      case 'a-z': return 'A - Z';
-      case 'z-a': return 'Z - A';
-      case 'latest': return 'Latest';
-      case 'earliest': return 'Earliest';
-    }
-  };
+  useEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <TouchableOpacity onPress={cycleSort} style={styles.sortBtn} activeOpacity={0.7}>
+          <Text style={[styles.sortBtnText, { color: c.tint }]}>
+            {SORT_LABELS[sort]}
+          </Text>
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, sort, c.tint]);
 
   const handleDelete = (contact: Contact) => {
     Alert.alert('Delete Contact', `Remove "${contact.name}" from IRIS?`, [
@@ -65,11 +79,8 @@ export default function ContactsScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          // Optimistically remove from state for immediate UI update
-          setContacts((prev) => prev.filter((c) => c.id !== contact.id));
-
+          setContacts((prev) => prev.filter((ct) => ct.id !== contact.id));
           await deleteContact(contact.id);
-          // Attempt server sync; ignore failure — local delete always succeeds
           try {
             const settings = await getSettings();
             apiService.setSettings(settings);
@@ -81,43 +92,26 @@ export default function ContactsScreen() {
     ]);
   };
 
-  useEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity onPress={cycleSortMethod} style={{ marginRight: 16 }}>
-          <Text style={{ color: actionBg, fontSize: 16, fontWeight: '600' }}>
-            Sort: {getSortLabel()}
-          </Text>
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation, sortMethod, actionBg]);
-
   const sortedContacts = [...contacts].sort((a, b) => {
-    if (sortMethod === 'a-z') {
-      return a.name.localeCompare(b.name);
-    } else if (sortMethod === 'z-a') {
-      return b.name.localeCompare(a.name);
-    } else if (sortMethod === 'latest') {
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    } else {
-      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-    }
+    if (sort === 'a-z')      return a.name.localeCompare(b.name);
+    if (sort === 'z-a')      return b.name.localeCompare(a.name);
+    if (sort === 'latest')   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
   });
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.background }]}>
-        <ActivityIndicator color={colors.tint} />
+      <View style={[styles.center, { backgroundColor: c.background }]}>
+        <ActivityIndicator color={c.tint} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={[styles.root, { backgroundColor: c.background }]}>
       {contacts.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={[styles.emptyText, { color: colors.icon }]}>
+        <View style={styles.center}>
+          <Text style={[styles.emptyText, { color: c.textSub }]}>
             No contacts yet.{'\n'}Tap + to add someone.
           </Text>
         </View>
@@ -125,26 +119,29 @@ export default function ContactsScreen() {
         <FlatList
           data={sortedContacts}
           keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: c.border }]} />}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={[styles.row, { borderBottomColor: colors.icon + '33' }]}
+              style={[styles.row, { backgroundColor: c.surface }]}
               onPress={() => router.push(`/contact/${item.id}`)}
               activeOpacity={0.7}>
-              <View style={[styles.avatar, { backgroundColor: actionBg }]}>
-                <Text style={[styles.avatarText, { color: actionFg }]}>
-                  {item.name[0]?.toUpperCase() ?? '?'}
-                </Text>
+              <View style={[styles.avatar, { backgroundColor: avatarColor(item.name), width: avatarSize, height: avatarSize }]}>
+                <Text style={[styles.avatarText, { fontSize: Math.round(19 * scale) }]}>{item.name[0]?.toUpperCase() ?? '?'}</Text>
               </View>
+
               <View style={styles.rowInfo}>
-                <Text style={[styles.rowName, { color: colors.text }]}>{item.name}</Text>
-                <Text style={[styles.rowMeta, { color: colors.icon }]}>
-                  {item.synced ? '✓ Synced to server' : '⚠ Not synced'}
+                <Text style={[styles.rowName, { color: c.text }]}>{item.name}</Text>
+                <Text style={[styles.rowMeta, { color: item.synced ? c.success : c.error }]}>
+                  {item.synced ? '✓ Synced' : '⚠ Not synced'}
                 </Text>
               </View>
+
               <TouchableOpacity
                 onPress={() => handleDelete(item)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={styles.deleteText}>Delete</Text>
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={[styles.deleteBtn, { backgroundColor: isDark ? '#2A1A1A' : '#FEF2F2' }]}>
+                <Text style={[styles.deleteBtnText, { color: c.error }]}>Delete</Text>
               </TouchableOpacity>
             </TouchableOpacity>
           )}
@@ -152,78 +149,60 @@ export default function ContactsScreen() {
       )}
 
       <TouchableOpacity
-        style={[styles.fab, { backgroundColor: actionBg }]}
+        style={[styles.fab, { backgroundColor: c.tint, width: fabSize, height: fabSize }, Shadow.md]}
         onPress={() => router.push('/contact/add')}
         activeOpacity={0.85}>
-        <Text style={[styles.fabText, { color: actionFg }]}>+</Text>
+        <Text style={[styles.fabIcon, { fontSize: Math.round(30 * scale) }]}>+</Text>
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  emptyText: {
-    textAlign: 'center',
-    fontSize: 15,
-    lineHeight: 24,
-  },
-  sortRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  sortLabel: {
-    fontSize: 14,
-  },
-  sortValue: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  root:   { flex: 1 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
+  emptyText: { ...Type.body, textAlign: 'center', lineHeight: 24 },
+
+  sortBtn:     { marginRight: Space.md },
+  sortBtnText: { ...Type.bodyBold },
+
+  listContent: { paddingVertical: Space.sm },
+
+  separator: { height: StyleSheet.hairlineWidth, marginLeft: 72 },
+
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: Space.md,
+    paddingVertical: Space.sm + 2,
+    gap: Space.md,
   },
+
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    borderRadius: Radius.full,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
   },
-  avatarText: { fontWeight: '700', fontSize: 18 },
-  rowInfo: { flex: 1 },
-  rowName: { fontSize: 16, fontWeight: '600' },
-  rowMeta: { fontSize: 13, marginTop: 2 },
-  deleteText: { color: '#F44336', fontWeight: '600', fontSize: 14 },
+  avatarText: { color: '#fff', fontWeight: '700' },
+
+  rowInfo: { flex: 1, gap: 2 },
+  rowName: { ...Type.bodyBold },
+  rowMeta: { ...Type.caption, fontWeight: '600' },
+
+  deleteBtn: {
+    paddingHorizontal: Space.sm + 2,
+    paddingVertical: 5,
+    borderRadius: Radius.sm,
+  },
+  deleteBtnText: { fontSize: 13, fontWeight: '600' },
+
   fab: {
     position: 'absolute',
-    bottom: 28,
-    right: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    bottom: Space.xl,
+    right: Space.md + Space.sm,
+    borderRadius: Radius.full,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
   },
-  fabText: { fontSize: 30, lineHeight: 34, fontWeight: '300' },
+  fabIcon: { color: '#fff', lineHeight: 34, fontWeight: '300' },
 });

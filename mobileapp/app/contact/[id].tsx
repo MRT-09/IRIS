@@ -10,12 +10,16 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
-import { Colors } from '@/constants/theme';
+import { Colors, Space, Radius, Type, Shadow } from '@/constants/theme';
 import { useAppTheme } from '@/src/store/theme';
 import {
   getContact,
@@ -29,16 +33,17 @@ import { getSettings } from '@/src/store/settings';
 
 export default function EditContactScreen() {
   const { colorScheme } = useAppTheme();
-  const colors = Colors[colorScheme ?? 'light'];
-  const isDark = colorScheme === 'dark';
-  const actionBg = isDark ? '#2D7FF9' : colors.tint;
+  const c = Colors[colorScheme ?? 'light'];
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { width } = useWindowDimensions();
+  const scale     = Math.min(Math.max(width / 390, 0.85), 1.25);
+  const thumbSize = Math.round(84 * scale);
 
-  const [name, setName] = useState('');
+  const [name, setName]           = useState('');
   const [imageUris, setImageUris] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [loading, setLoading]     = useState(true);
+  const [syncing, setSyncing]     = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -84,9 +89,8 @@ export default function EditContactScreen() {
     }
   };
 
-  const removeImage = (uri: string) => {
+  const removeImage = (uri: string) =>
     setImageUris((prev) => prev.filter((u) => u !== uri));
-  };
 
   const handleSubmit = async () => {
     if (!id) return;
@@ -100,7 +104,6 @@ export default function EditContactScreen() {
     }
 
     setSyncing(true);
-
     try {
       await upsertContact(id, name.trim());
       await replaceContactImages(id, imageUris);
@@ -130,134 +133,154 @@ export default function EditContactScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.center, { backgroundColor: colors.background }]}>
-        <ActivityIndicator color={colors.tint} />
-      </View>
+      <SafeAreaView style={[styles.center, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+        <ActivityIndicator color={c.tint} />
+      </SafeAreaView>
     );
   }
 
   return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: colors.background }]}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={[styles.root, { backgroundColor: c.background }]} edges={['top', 'bottom']}>
+      <KeyboardAvoidingView
+        style={styles.root}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          contentInsetAdjustmentBehavior="automatic">
 
-      {/* Name field */}
-      <Text style={[styles.label, { color: colors.text }]}>Name</Text>
-      <TextInput
-        style={[styles.input, { color: colors.text, borderColor: colors.icon + '55' }]}
-        value={name}
-        onChangeText={setName}
-        placeholder="Full name"
-        placeholderTextColor={colors.icon}
-        returnKeyType="done"
-      />
+          {/* Name */}
+          <Text style={[styles.fieldLabel, { color: c.textSub }]}>FULL NAME</Text>
+          <TextInput
+            style={[styles.input, { color: c.text, backgroundColor: c.surface, borderColor: c.border }]}
+            value={name}
+            onChangeText={setName}
+            placeholder="Full name"
+            placeholderTextColor={c.textSub}
+            returnKeyType="done"
+          />
 
-      {/* Images */}
-      <Text style={[styles.sectionTitle, { color: colors.text }]}>
-        Face Photos{imageUris.length > 0 ? ` (${imageUris.length})` : ''}
-      </Text>
-      <Text style={[styles.hint, { color: colors.icon }]}>
-        Updating photos will re-sync embeddings to the server.
-      </Text>
+          {/* Photos */}
+          <Text style={[styles.fieldLabel, { color: c.textSub, marginTop: Space.lg }]}>
+            FACE PHOTOS{imageUris.length > 0 ? `  (${imageUris.length})` : ''}
+          </Text>
+          <Text style={[styles.hint, { color: c.textSub }]}>
+            Updating photos will re-sync embeddings to the server.
+          </Text>
 
-      <View style={styles.photoButtons}>
-        <TouchableOpacity
-          style={[styles.photoBtn, { borderColor: colors.tint }]}
-          onPress={pickFromGallery}
-          activeOpacity={0.7}>
-          <Text style={[styles.photoBtnText, { color: colors.tint }]}>+ From Gallery</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.photoBtn, { borderColor: colors.tint }]}
-          onPress={takePhoto}
-          activeOpacity={0.7}>
-          <Text style={[styles.photoBtnText, { color: colors.tint }]}>+ Camera</Text>
-        </TouchableOpacity>
-      </View>
+          <View style={styles.photoButtons}>
+            <TouchableOpacity
+              style={[styles.photoBtn, { backgroundColor: c.surface, borderColor: c.tint }, Shadow.sm]}
+              onPress={pickFromGallery}
+              activeOpacity={0.7}>
+              <Text style={[styles.photoBtnText, { color: c.tint }]}>Gallery</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.photoBtn, { backgroundColor: c.surface, borderColor: c.tint }, Shadow.sm]}
+              onPress={takePhoto}
+              activeOpacity={0.7}>
+              <Text style={[styles.photoBtnText, { color: c.tint }]}>Camera</Text>
+            </TouchableOpacity>
+          </View>
 
-      {imageUris.length > 0 && (
-        <FlatList
-          data={imageUris}
-          horizontal
-          keyExtractor={(uri) => uri}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.imageRow}
-          renderItem={({ item }) => (
-            <View style={styles.thumbWrapper}>
-              <Image source={{ uri: item }} style={styles.thumb} />
-              <TouchableOpacity
-                style={styles.removeBtn}
-                onPress={() => removeImage(item)}
-                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                <Text style={styles.removeBtnText}>×</Text>
-              </TouchableOpacity>
-            </View>
+          {imageUris.length > 0 && (
+            <FlatList
+              data={imageUris}
+              horizontal
+              keyExtractor={(uri) => uri}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.thumbRow}
+              style={styles.thumbList}
+              renderItem={({ item }) => (
+                <View style={[styles.thumbWrap, { width: thumbSize, height: thumbSize }]}>
+                  <Image source={{ uri: item }} style={styles.thumb} resizeMode="cover" />
+                  <TouchableOpacity
+                    style={styles.removeBtn}
+                    onPress={() => removeImage(item)}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    <View style={[styles.xBar, { transform: [{ rotate: '45deg' }] }]} />
+                    <View style={[styles.xBar, { transform: [{ rotate: '-45deg' }] }]} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            />
           )}
-          style={styles.imageList}
-        />
-      )}
 
-      <TouchableOpacity
-        style={[styles.submitBtn, { backgroundColor: syncing ? colors.icon : actionBg }]}
-        onPress={handleSubmit}
-        disabled={syncing}
-        activeOpacity={0.85}>
-        {syncing ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.submitBtnText}>Update & Re-sync</Text>
-        )}
-      </TouchableOpacity>
-    </ScrollView>
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: syncing ? c.textSub : c.tint }]}
+            onPress={handleSubmit}
+            disabled={syncing}
+            activeOpacity={0.85}>
+            {syncing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitBtnText}>Update & Re-sync</Text>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  root:   { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  content: { padding: 16, paddingBottom: 40 },
-  label: { fontSize: 13, fontWeight: '700', letterSpacing: 0.5, marginBottom: 6 },
+  content: { padding: Space.md, paddingBottom: Space.xxl },
+
+  fieldLabel: { ...Type.label, marginBottom: Space.xs + 2 },
+
   input: {
     borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+    borderRadius: Radius.md,
+    paddingHorizontal: Space.md,
+    paddingVertical: Space.sm + 3,
     fontSize: 16,
-    marginBottom: 24,
   },
-  sectionTitle: { fontSize: 16, fontWeight: '700', marginBottom: 4 },
-  hint: { fontSize: 13, marginBottom: 14, lineHeight: 18 },
-  photoButtons: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+
+  hint: { ...Type.caption, marginBottom: Space.md, lineHeight: 18 },
+
+  photoButtons: { flexDirection: 'row', gap: Space.sm, marginBottom: Space.md },
   photoBtn: {
     flex: 1,
     borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderRadius: 8,
-    paddingVertical: 12,
+    borderRadius: Radius.md,
+    paddingVertical: Space.sm + 4,
     alignItems: 'center',
   },
-  photoBtnText: { fontWeight: '600', fontSize: 14 },
-  imageList: { marginBottom: 8 },
-  imageRow: { gap: 8 },
-  thumbWrapper: { position: 'relative' },
-  thumb: { width: 80, height: 80, borderRadius: 8 },
+  photoBtnText: { ...Type.bodyBold },
+
+  thumbList: { marginBottom: Space.sm },
+  thumbRow:  { gap: Space.sm, paddingBottom: Space.xs },
+  thumbWrap: { position: 'relative', borderRadius: Radius.md, overflow: 'hidden' },
+  thumb:     { width: '100%', height: '100%', borderRadius: Radius.md },
+
   removeBtn: {
     position: 'absolute',
-    top: -6,
-    right: -6,
+    top: 5,
+    right: 5,
     width: 22,
     height: 22,
-    borderRadius: 11,
-    backgroundColor: '#F44336',
+    borderRadius: Radius.full,
+    backgroundColor: 'rgba(229,57,53,0.92)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  removeBtnText: { color: '#fff', fontWeight: '700', fontSize: 15, lineHeight: 18 },
+  xBar: {
+    position: 'absolute',
+    top: 10,
+    left: 6,
+    width: 10,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: '#fff',
+  },
+
   submitBtn: {
-    marginTop: 32,
-    borderRadius: 12,
-    paddingVertical: 16,
+    marginTop: Space.xl,
+    borderRadius: Radius.lg,
+    paddingVertical: Space.md,
     alignItems: 'center',
   },
   submitBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
