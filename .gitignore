@@ -29,4 +29,8 @@ htmlcov/
 
 node_modules/
 .npm
+
+faces/
+
+server
 package-lock.json
