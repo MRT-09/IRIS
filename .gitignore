@@ -33,3 +33,4 @@ node_modules/
 faces/
 
 server
+package-lock.json
