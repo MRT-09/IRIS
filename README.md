@@ -40,7 +40,7 @@ The system uses a fast and efficient frozen face embedding model, allowing insta
 1. Check that you have Python 3.8+ installed. Navigate to the project root and install the required packages (using a virtual environment is highly recommended):
    ```bash
    python -m venv venv
-   source venv/bin/activate  # On Windows: venv\\Scripts\\activate
+   source venv/bin/activate 
    pip install -r requirements.txt
    ```
 2. Start the Flask backend:
@@ -78,7 +78,7 @@ The system uses a fast and efficient frozen face embedding model, allowing insta
 ## Technology Stack
 
 - **Backend:** Python, Flask, OpenCV, InsightFace, SQLAlchemy
-- **Frontend:** React Native, Expo (Router, SQLite, Audio, Notifications, Speech)
+- **Frontend:** React Native, Expo (Router, Audio, Notifications, Speech)
 - **Database:** SQLite
 
 ---
