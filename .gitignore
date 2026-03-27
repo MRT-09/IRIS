@@ -60,6 +60,10 @@ client/android
 *.sqlite
 *.sqlite3
 
-# Project-specific
-faces/
-server
+server/data
+
+*.db
+*.db-shm
+*.db-wal
+
+*.pkl

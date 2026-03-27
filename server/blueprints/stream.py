@@ -15,6 +15,7 @@ JPEG_SOI = b"\xff\xd8"
 JPEG_EOI = b"\xff\xd9"
 
 _latest_frame: bytes | None = None
+_latest_inference_frame: bytes | None = None
 _frame_lock = threading.Lock()
 
 
@@ -27,6 +28,17 @@ def _set_latest_frame(frame_bytes: bytes):
     global _latest_frame
     with _frame_lock:
         _latest_frame = frame_bytes
+
+
+def _set_latest_inference_frame(frame_bytes: bytes):
+    global _latest_inference_frame
+    with _frame_lock:
+        _latest_inference_frame = frame_bytes
+
+
+def get_latest_inference_frame() -> bytes | None:
+    with _frame_lock:
+        return _latest_inference_frame
 
 
 @stream_bp.route("/push", methods=["POST"])
@@ -63,6 +75,7 @@ def push_stream():
                 try:
                     arr = np.frombuffer(frame_bytes, dtype=np.uint8)
                     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    _set_latest_inference_frame(frame_bytes)
                     if frame is not None:
                         detections = pipeline.process_frame(frame)
                         detections = cooldown.filter_detections(detections)
@@ -84,6 +97,19 @@ def push_stream():
                     pass
 
     return "", 200
+
+
+@stream_bp.route("/inference_frame", methods=["GET"])
+def inference_frame():
+    """Return the latest frame that was sent to the inference pipeline as a JPEG."""
+    frame = get_latest_inference_frame()
+    if frame is None:
+        return "", 204
+    return Response(
+        frame,
+        mimetype="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @stream_bp.route("/preview", methods=["GET"])

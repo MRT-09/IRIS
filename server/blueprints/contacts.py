@@ -3,7 +3,7 @@ import shutil
 import uuid
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from models.contact import Contact, ContactImage
 from models.db import db
@@ -75,6 +75,12 @@ def create_contact():
                 continue
 
     db.session.commit()
+
+    # Reset cooldown so the person is announced on the very next detection
+    cooldown = current_app.extensions.get("iris_cooldown")
+    if cooldown:
+        cooldown.reset(contact_id)
+
     result = contact.to_dict()
     result["images_saved"] = images_saved
     return jsonify(result), 201
@@ -82,6 +88,7 @@ def create_contact():
 
 @contacts_bp.route("/<contact_id>", methods=["PUT"])
 def update_contact(contact_id):
+    from flask import current_app
     contact = Contact.query.get_or_404(contact_id)
     data = request.get_json(force=True)
     name = data.get("name", "").strip()
@@ -91,11 +98,20 @@ def update_contact(contact_id):
     contact.name = name
     contact.updated_at = datetime.utcnow()
     db.session.commit()
+
+    # Keep embeddings but update the stored name so detections announce correctly
+    store = current_app.extensions.get("iris_store")
+    if store:
+        entry = store.get_contact(contact_id)
+        if entry:
+            store.add_contact(contact_id, name, entry["embeddings"])
+
     return jsonify(contact.to_dict())
 
 
 @contacts_bp.route("/<contact_id>", methods=["DELETE"])
 def delete_contact(contact_id):
+    from flask import current_app
     contact = Contact.query.get_or_404(contact_id)
     db.session.delete(contact)
     db.session.commit()
@@ -104,6 +120,10 @@ def delete_contact(contact_id):
     contact_dir = os.path.join(CONTACTS_DIR, contact_id)
     if os.path.exists(contact_dir):
         shutil.rmtree(contact_dir)
+
+    store = current_app.extensions.get("iris_store")
+    if store:
+        store.remove_contact(contact_id)
 
     return "", 204
 
