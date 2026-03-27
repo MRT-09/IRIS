@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 
 import { Colors, Space, Radius, Type, Shadow } from '@/constants/theme';
@@ -24,6 +24,15 @@ import { useAppTheme } from '@/src/store/theme';
 import { upsertContact, replaceContactImages, markContactSynced } from '@/src/services/database';
 import { apiService } from '@/src/services/api';
 import { getSettings } from '@/src/store/settings';
+
+async function ensurePermanentUri(uri: string, contactId: string): Promise<string> {
+  const dir = `${FileSystem.documentDirectory}contacts/${contactId}/`;
+  if (uri.startsWith(dir)) return uri;
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+  await FileSystem.copyAsync({ from: uri, to: dest });
+  return dest;
+}
 
 function generateUUID(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -40,9 +49,10 @@ export default function AddContactScreen() {
   const scale    = Math.min(Math.max(width / 390, 0.85), 1.25);
   const thumbSize = Math.round(84 * scale);
 
-  const [name, setName]           = useState('');
-  const [imageUris, setImageUris] = useState<string[]>([]);
-  const [syncing, setSyncing]     = useState(false);
+  const [name, setName]               = useState('');
+  const [description, setDescription] = useState('');
+  const [imageUris, setImageUris]     = useState<string[]>([]);
+  const [syncing, setSyncing]         = useState(false);
 
   const pickFromGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -89,11 +99,15 @@ export default function AddContactScreen() {
     const contactId = generateUUID();
 
     try {
-      await upsertContact(contactId, name.trim());
-      await replaceContactImages(contactId, imageUris);
+      await upsertContact(contactId, name.trim(), description.trim());
+
+      const permanentUris = await Promise.all(
+        imageUris.map((uri) => ensurePermanentUri(uri, contactId))
+      );
+      await replaceContactImages(contactId, permanentUris);
 
       const base64s = await Promise.all(
-        imageUris.map((uri) =>
+        permanentUris.map((uri) =>
           FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
         )
       );
@@ -101,13 +115,14 @@ export default function AddContactScreen() {
       const settings = await getSettings();
       apiService.setSettings(settings);
       await apiService.syncContact(contactId, name.trim(), base64s);
+      await apiService.submitTraining();
       await markContactSynced(contactId);
 
       router.back();
-    } catch {
+    } catch (e) {
       Alert.alert(
-        'Partially saved',
-        'Contact saved locally but could not sync to server. It will show as "Not synced".'
+        'Sync failed',
+        `Could not sync to server: ${e instanceof Error ? e.message : String(e)}`
       );
       router.back();
     } finally {
@@ -137,12 +152,24 @@ export default function AddContactScreen() {
             returnKeyType="done"
           />
 
+          {/* Description */}
+          <Text style={[styles.fieldLabel, { color: c.textSub, marginTop: Space.lg }]}>DESCRIPTION</Text>
+          <TextInput
+            style={[styles.input, { color: c.text, backgroundColor: c.surface, borderColor: c.border }]}
+            value={description}
+            onChangeText={setDescription}
+            placeholder="e.g. colleague, family member…"
+            placeholderTextColor={c.textSub}
+            returnKeyType="done"
+            maxLength={80}
+          />
+
           {/* Photos */}
           <Text style={[styles.fieldLabel, { color: c.textSub, marginTop: Space.lg }]}>
             FACE PHOTOS{imageUris.length > 0 ? `  (${imageUris.length})` : ''}
           </Text>
           <Text style={[styles.hint, { color: c.textSub }]}>
-            Add 3–10 photos from different angles for best accuracy.
+            Add 1–10 photos from different angles for best accuracy.
           </Text>
 
           <View style={styles.photoButtons}>
@@ -191,7 +218,7 @@ export default function AddContactScreen() {
             {syncing ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.submitBtnText}>Save & Sync to Server</Text>
+              <Text style={styles.submitBtnText}>Save to Device</Text>
             )}
           </TouchableOpacity>
         </ScrollView>

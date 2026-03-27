@@ -1,6 +1,7 @@
 export interface Contact {
   id: string;
   name: string;
+  description: string;
   created_at: string;
   synced: number;
 }

@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator, Image, useWindowDimensions } from 'react-native';
 
 import { Colors, Space, Radius, Type, Shadow } from '@/constants/theme';
 import { useAppTheme } from '@/src/store/theme';
@@ -21,26 +20,30 @@ interface DetectionLog {
 export default function HomeScreen() {
   const { colorScheme } = useAppTheme();
   const c = Colors[colorScheme ?? 'light'];
-  const isDark = colorScheme === 'dark';
   const { width } = useWindowDimensions();
 
-  const [connected, setConnected]     = useState(false);
-  const [detections, setDetections]   = useState<DetectionLog[]>([]);
-  const [streamUrl, setStreamUrl]     = useState('');
-  const [streamError, setStreamError] = useState(false);
-
-  useEffect(() => {
-    getSettings().then((s) => setStreamUrl(`${s.serverUrl}/video_feed`));
-  }, []);
+  const [connected, setConnected]   = useState(false);
+  const [detections, setDetections] = useState<DetectionLog[]>([]);
+  const detectionIdRef              = useRef(0);
+  // Double-buffered frame display: displayedFrame is always visible,
+  // nextFrame loads silently off-screen and swaps in only on onLoad.
+  const [displayedFrame, setDisplayedFrame] = useState<string | null>(null);
+  const nextFrameRef                        = useRef<string | null>(null);
+  const [preloadKey, setPreloadKey]         = useState(0);
+  const serverUrlRef                        = useRef('');
+  const pollTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clearTimerRef                       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pingTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const handleDetection = useCallback(async (event: DetectionEvent) => {
     const names = event.contacts.map((ct) => ct.name);
     const avgConf =
       event.contacts.reduce((sum, ct) => sum + ct.confidence, 0) / event.contacts.length;
 
-    setDetections((prev) =>
-      [{ id: String(Date.now()), names, timestamp: event.timestamp, confidence: avgConf }, ...prev].slice(0, 50)
-    );
+    const id = String(++detectionIdRef.current);
+    if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+    setDetections([{ id, names, timestamp: event.timestamp, confidence: avgConf }]);
+    clearTimerRef.current = setTimeout(() => setDetections([]), 60 * 60 * 1000);
 
     const settings = await getSettings();
     let useAudio = settings.outputMode === 'tts';
@@ -54,14 +57,67 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    const unsubStatus = apiService.onStatus(setConnected);
-    const unsubEvent  = apiService.onEvent(handleDetection);
-    apiService.connect();
-    return () => { unsubStatus(); unsubEvent(); apiService.disconnect(); };
+    let cancelled = false;
+
+    const unsubEvent = apiService.onEvent(handleDetection);
+
+    getSettings().then((s) => {
+      if (cancelled) return;
+      serverUrlRef.current = s.serverUrl;
+      apiService.setSettings(s);
+      apiService.connect();
+
+      const ping = async () => {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 3000);
+          await fetch(`${serverUrlRef.current}/`, { signal: ctrl.signal, cache: 'no-store' });
+          clearTimeout(t);
+          setConnected(true);
+        } catch {
+          setConnected(false);
+        }
+      };
+      ping();
+      pingTimerRef.current = setInterval(ping, 5000);
+
+      const fetchFrame = async () => {
+        try {
+          const res = await fetch(
+            `${serverUrlRef.current}/api/stream/inference_frame`,
+            { cache: 'no-store' },
+          );
+          if (!res.ok) return;
+          const blob = await res.blob();
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            if (typeof reader.result === 'string') {
+              nextFrameRef.current = reader.result;
+              setPreloadKey((k) => k + 1);
+            }
+          };
+          reader.readAsDataURL(blob);
+        } catch {
+          // server unreachable — keep showing last frame
+        }
+      };
+
+      fetchFrame();
+      pollTimerRef.current = setInterval(fetchFrame, 1000);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubEvent();
+      apiService.disconnect();
+      if (pingTimerRef.current) clearInterval(pingTimerRef.current);
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+    };
   }, [handleDetection]);
 
   const confidenceColor = (v: number) =>
-    v >= 0.9 ? c.success : v >= 0.7 ? c.tint : c.error;
+    v >= 0.75 ? c.success : v >= 0.5 ? c.tint : c.error;
 
   const hPad = Math.round(width * 0.041); // ~16px on 390px screen
 
@@ -69,32 +125,26 @@ export default function HomeScreen() {
     <View style={[styles.root, { backgroundColor: c.background }]}>
 
       {/* ── Camera feed card ── */}
-      <View style={[styles.feedCard, { backgroundColor: '#000', marginHorizontal: hPad, marginTop: hPad }, Shadow.md]}>
-        {streamUrl ? (
-          streamError ? (
-            <View style={styles.feedCenter}>
-              <Text style={styles.feedErrorIcon}>⚠</Text>
-              <Text style={[styles.feedErrorText, { color: c.textSub }]}>Camera unavailable</Text>
-            </View>
-          ) : (
-            <WebView
-              source={{
-                html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><style>*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;overflow:hidden;background:#000;display:flex;justify-content:center;align-items:center}img{display:block;width:100%;height:100%;object-fit:contain;object-position:center}</style></head><body><img src="${streamUrl}"/></body></html>`,
-              }}
-              style={styles.feedWebView}
-              scrollEnabled={false}
-              bounces={false}
-              mixedContentMode="always"
-              allowsInlineMediaPlayback
-              mediaPlaybackRequiresUserAction={false}
-              onError={() => setStreamError(true)}
-              onHttpError={() => setStreamError(true)}
-            />
-          )
+      <View style={[styles.feedCard, { backgroundColor: '#00000000', width: width - hPad * 2, alignSelf: 'center', marginTop: hPad }, Shadow.md]}>
+        {/* Visible frame — only updated once the next one has fully loaded */}
+        {displayedFrame ? (
+          <Image source={{ uri: displayedFrame }} style={styles.feedImage} resizeMode="contain" />
         ) : (
           <View style={styles.feedCenter}>
             <ActivityIndicator color="#fff" />
           </View>
+        )}
+
+        {/* Off-screen preload — swaps to visible on load, no black flash */}
+        {nextFrameRef.current !== null && (
+          <Image
+            key={preloadKey}
+            source={{ uri: nextFrameRef.current }}
+            style={styles.preload}
+            onLoad={() => {
+              if (nextFrameRef.current) setDisplayedFrame(nextFrameRef.current);
+            }}
+          />
         )}
 
         {/* Status badge overlaid on feed */}
@@ -156,10 +206,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     aspectRatio: 4 / 3,
   },
-  feedWebView: { flex: 1, backgroundColor: '#000' },
+  feedImage: { flex: 1, width: '100%', height: '100%' },
+  preload:   { position: 'absolute', width: 1, height: 1, opacity: 0 },
   feedCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Space.sm },
-  feedErrorIcon: { fontSize: 32, color: '#fff' },
-  feedErrorText: { ...Type.body },
 
   // Status badge (overlaid)
   statusBadge: {

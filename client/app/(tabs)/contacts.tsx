@@ -93,6 +93,7 @@ export default function ContactsScreen() {
   };
 
   const sortedContacts = [...contacts].sort((a, b) => {
+    if (b.synced !== a.synced) return b.synced - a.synced;
     if (sort === 'a-z')      return a.name.localeCompare(b.name);
     if (sort === 'z-a')      return b.name.localeCompare(a.name);
     if (sort === 'latest')   return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -120,10 +121,9 @@ export default function ContactsScreen() {
           data={sortedContacts}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
-          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: c.border }]} />}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={[styles.row, { backgroundColor: c.surface }]}
+              style={[styles.card, { backgroundColor: c.surface, borderColor: item.synced ? c.success : c.error }, Shadow.sm]}
               onPress={() => router.push(`/contact/${item.id}`)}
               activeOpacity={0.7}>
               <View style={[styles.avatar, { backgroundColor: avatarColor(item.name), width: avatarSize, height: avatarSize }]}>
@@ -132,9 +132,15 @@ export default function ContactsScreen() {
 
               <View style={styles.rowInfo}>
                 <Text style={[styles.rowName, { color: c.text }]}>{item.name}</Text>
+                {item.description && (
+                  <Text style={[styles.rowMeta, { color: c.textSub }]}>
+                  {item.description}
+                  </Text>
+                )}
+                {!item.synced &&
                 <Text style={[styles.rowMeta, { color: item.synced ? c.success : c.error }]}>
                   {item.synced ? '✓ Synced' : '⚠ Not synced'}
-                </Text>
+                </Text>}
               </View>
 
               <TouchableOpacity
@@ -166,16 +172,18 @@ const styles = StyleSheet.create({
   sortBtn:     { marginRight: Space.md },
   sortBtnText: { ...Type.bodyBold },
 
-  listContent: { paddingVertical: Space.sm },
+  listContent: { paddingTop: Space.sm, paddingBottom: Space.xl },
 
-  separator: { height: StyleSheet.hairlineWidth, marginLeft: 72 },
-
-  row: {
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginHorizontal: Space.md,
+    marginBottom: Space.sm,
     paddingHorizontal: Space.md,
     paddingVertical: Space.sm + 2,
     gap: Space.md,
+    borderRadius: Radius.lg,
+    borderWidth: 1.5,
   },
 
   avatar: {

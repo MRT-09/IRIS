@@ -11,6 +11,7 @@ export async function initDatabase(): Promise<void> {
     CREATE TABLE IF NOT EXISTS contacts (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       synced INTEGER DEFAULT 0
     );
@@ -22,6 +23,10 @@ export async function initDatabase(): Promise<void> {
       FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
     );
   `);
+  // Migrate existing databases that predate the description column
+  try {
+    await db.execAsync(`ALTER TABLE contacts ADD COLUMN description TEXT NOT NULL DEFAULT ''`);
+  } catch { /* column already exists */ }
 }
 
 export async function getAllContacts(): Promise<Contact[]> {
@@ -32,11 +37,11 @@ export async function getContact(id: string): Promise<Contact | null> {
   return db.getFirstAsync<Contact>('SELECT * FROM contacts WHERE id = ?', [id]);
 }
 
-export async function upsertContact(id: string, name: string): Promise<void> {
+export async function upsertContact(id: string, name: string, description = ''): Promise<void> {
   await db.runAsync(
-    `INSERT INTO contacts (id, name, synced) VALUES (?, ?, 0)
-     ON CONFLICT(id) DO UPDATE SET name = excluded.name, synced = 0`,
-    [id, name]
+    `INSERT INTO contacts (id, name, description, synced) VALUES (?, ?, ?, 0)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, description = excluded.description, synced = 0`,
+    [id, name, description]
   );
 }
 

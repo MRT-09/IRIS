@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { Colors, Space, Radius, Type, Shadow } from '@/constants/theme';
@@ -31,6 +31,15 @@ import {
 import { apiService } from '@/src/services/api';
 import { getSettings } from '@/src/store/settings';
 
+async function ensurePermanentUri(uri: string, contactId: string): Promise<string> {
+  const dir = `${FileSystem.documentDirectory}contacts/${contactId}/`;
+  if (uri.startsWith(dir)) return uri; // already permanent
+  await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  const dest = `${dir}${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
+  await FileSystem.copyAsync({ from: uri, to: dest });
+  return dest;
+}
+
 export default function EditContactScreen() {
   const { colorScheme } = useAppTheme();
   const c = Colors[colorScheme ?? 'light'];
@@ -40,10 +49,11 @@ export default function EditContactScreen() {
   const scale     = Math.min(Math.max(width / 390, 0.85), 1.25);
   const thumbSize = Math.round(84 * scale);
 
-  const [name, setName]           = useState('');
-  const [imageUris, setImageUris] = useState<string[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [syncing, setSyncing]     = useState(false);
+  const [name, setName]               = useState('');
+  const [description, setDescription] = useState('');
+  const [imageUris, setImageUris]     = useState<string[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [syncing, setSyncing]         = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -56,6 +66,7 @@ export default function EditContactScreen() {
       }
       const images = await getContactImages(id);
       setName(contact.name);
+      setDescription(contact.description ?? '');
       setImageUris(images.map((img) => img.image_uri));
       setLoading(false);
     })();
@@ -105,11 +116,15 @@ export default function EditContactScreen() {
 
     setSyncing(true);
     try {
-      await upsertContact(id, name.trim());
-      await replaceContactImages(id, imageUris);
+      await upsertContact(id, name.trim(), description.trim());
+
+      const permanentUris = await Promise.all(
+        imageUris.map((uri) => ensurePermanentUri(uri, id))
+      );
+      await replaceContactImages(id, permanentUris);
 
       const base64s = await Promise.all(
-        imageUris.map((uri) =>
+        permanentUris.map((uri) =>
           FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 })
         )
       );
@@ -117,13 +132,14 @@ export default function EditContactScreen() {
       const settings = await getSettings();
       apiService.setSettings(settings);
       await apiService.syncContact(id, name.trim(), base64s);
+      await apiService.submitTraining();
       await markContactSynced(id);
 
       router.back();
-    } catch {
+    } catch (e) {
       Alert.alert(
-        'Partially saved',
-        'Contact updated locally but could not re-sync to server. It will show as "Not synced".'
+        'Sync failed',
+        `Could not sync to server: ${e instanceof Error ? e.message : String(e)}`
       );
       router.back();
     } finally {
@@ -158,6 +174,18 @@ export default function EditContactScreen() {
             placeholder="Full name"
             placeholderTextColor={c.textSub}
             returnKeyType="done"
+          />
+
+          {/* Description */}
+          <Text style={[styles.fieldLabel, { color: c.textSub, marginTop: Space.lg }]}>DESCRIPTION</Text>
+          <TextInput
+            style={[styles.input, { color: c.text, backgroundColor: c.surface, borderColor: c.border }]}
+            value={description}
+            onChangeText={setDescription}
+            placeholder="e.g. colleague, family member…"
+            placeholderTextColor={c.textSub}
+            returnKeyType="done"
+            maxLength={80}
           />
 
           {/* Photos */}
@@ -214,7 +242,7 @@ export default function EditContactScreen() {
             {syncing ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.submitBtnText}>Update & Re-sync</Text>
+              <Text style={styles.submitBtnText}>Update</Text>
             )}
           </TouchableOpacity>
         </ScrollView>

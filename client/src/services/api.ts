@@ -1,10 +1,11 @@
 import type { AppSettings, DetectionEvent } from '../types';
+import { DEFAULT_SERVER_URL } from '../store/settings';
 
 type EventHandler = (event: DetectionEvent) => void;
 type StatusHandler = (connected: boolean) => void;
 
 class ApiService {
-  private abortController: AbortController | null = null;
+  private _xhr: XMLHttpRequest | null = null;
   private eventHandlers = new Set<EventHandler>();
   private statusHandlers = new Set<StatusHandler>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -16,7 +17,7 @@ class ApiService {
   }
 
   private get baseUrl(): string {
-    return this._settings?.serverUrl ?? 'http://192.168.1.100:8000';
+    return this._settings?.serverUrl ?? DEFAULT_SERVER_URL;
   }
 
   get isConnected(): boolean {
@@ -28,64 +29,69 @@ class ApiService {
     this._startSSE();
   }
 
-  // SSE over fetch — one-directional server→client push.
-  // Simpler than WebSocket on the Pi and works over plain HTTP/1.1.
-  private async _startSSE(): Promise<void> {
-    this.abortController = new AbortController();
+  // SSE via XMLHttpRequest — React Native doesn't support response.body
+  // as a ReadableStream, but XHR's onprogress fires as chunks arrive.
+  private _startSSE(): void {
+    const xhr = new XMLHttpRequest();
+    this._xhr = xhr;
 
-    try {
-      const response = await fetch(`${this.baseUrl}/api/notify/events`, {
-        signal: this.abortController.signal,
-        headers: { Accept: 'text/event-stream' },
-      });
+    let lastLength = 0;
+    let buffer = '';
 
-      if (!response.ok || !response.body) {
-        throw new Error(`HTTP ${response.status}`);
+    xhr.open('GET', `${this.baseUrl}/api/notify/events`);
+    xhr.setRequestHeader('Accept', 'text/event-stream');
+    xhr.setRequestHeader('Cache-Control', 'no-cache');
+
+    xhr.onprogress = () => {
+      const newData = xhr.responseText.slice(lastLength);
+      lastLength = xhr.responseText.length;
+
+      if (!this._connected) {
+        this._connected = true;
+        this.notifyStatus(true);
       }
 
-      this._connected = true;
-      this.notifyStatus(true);
+      buffer += newData;
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (!data) continue;
-            try {
-              const event: DetectionEvent = JSON.parse(data);
-              if (event.type === 'contact_detected') {
-                this.eventHandlers.forEach((h) => h(event));
-              }
-            } catch {
-              // ignore malformed frames
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (!data) continue;
+          try {
+            const event: DetectionEvent = JSON.parse(data);
+            if (event.type === 'contact_detected') {
+              this.eventHandlers.forEach((h) => h(event));
             }
+          } catch {
+            // ignore malformed frames
           }
         }
       }
-    } catch (err: any) {
-      if (err?.name === 'AbortError') return;
-    }
+    };
 
-    this._connected = false;
-    this.notifyStatus(false);
-    this.scheduleReconnect();
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState === XMLHttpRequest.DONE) {
+        this._connected = false;
+        this.notifyStatus(false);
+        this.scheduleReconnect();
+      }
+    };
+
+    xhr.onerror = () => {
+      this._connected = false;
+      this.notifyStatus(false);
+      this.scheduleReconnect();
+    };
+
+    xhr.send();
   }
 
   disconnect(): void {
     this.clearReconnect();
-    this.abortController?.abort();
-    this.abortController = null;
+    this._xhr?.abort();
+    this._xhr = null;
     this._connected = false;
   }
 
