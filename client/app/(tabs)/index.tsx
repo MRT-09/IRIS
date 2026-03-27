@@ -35,11 +35,12 @@ export default function HomeScreen() {
   const pollTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null);
   const clearTimerRef                       = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentDetectionRef                 = useRef<DetectionLog | null>(null);
   // Per-contact cooldown: name → timestamp of last announcement
   const cooldownRef                         = useRef<Map<string, number>>(new Map());
 
   const COOLDOWN_MS  = 60 * 60 * 1000; // 1 hour — announcement cooldown
-  const PRESENCE_MS  = 4000;           // clear display 4s after last detection
+  const PRESENCE_MS  = 4000;          // clear display 15s after last detection (> server 10s cooldown)
 
   const handleDetection = useCallback(async (event: DetectionEvent) => {
     const names = event.contacts.map((ct) => ct.name);
@@ -49,11 +50,27 @@ export default function HomeScreen() {
     const id = String(++detectionIdRef.current);
     const entry: DetectionLog = { id, names, timestamp: event.timestamp, confidence: avgConf };
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-    setCurrentDetection((prev) => {
-      if (prev) setRecentDetections((r) => [prev, ...r].slice(0, 3));
-      return entry;
-    });
-    clearTimerRef.current = setTimeout(() => setCurrentDetection(null), PRESENCE_MS);
+    const addToRecent = (d: DetectionLog) => {
+      setRecentDetections((r) => [d, ...r].slice(0, 3));
+      setTimeout(() => setRecentDetections((r) => r.filter((x) => x.id !== d.id)), 60 * 1000);
+    };
+
+    const prev = currentDetectionRef.current;
+    const sameContacts = prev &&
+      prev.names.length === names.length &&
+      [...names].sort().join(',') === [...prev.names].sort().join(',');
+    if (prev && !sameContacts) addToRecent(prev);
+    currentDetectionRef.current = entry;
+    setCurrentDetection(entry);
+    clearTimerRef.current = setTimeout(() => {
+      const expiring = currentDetectionRef.current;
+      if (expiring) {
+        setRecentDetections((r) => [expiring, ...r].slice(0, 3));
+        setTimeout(() => setRecentDetections((r) => r.filter((x) => x.id !== expiring.id)), 60 * 1000);
+      }
+      currentDetectionRef.current = null;
+      setCurrentDetection(null);
+    }, PRESENCE_MS);
 
     // Filter to contacts not announced within the last hour
     const now = Date.now();
@@ -143,7 +160,7 @@ export default function HomeScreen() {
       };
 
       fetchFrame();
-      pollTimerRef.current = setInterval(fetchFrame, 1000);
+      pollTimerRef.current = setInterval(fetchFrame, 250);
     });
 
     return () => {
@@ -197,11 +214,11 @@ export default function HomeScreen() {
       <ScrollView contentContainerStyle={[styles.listContent, { paddingHorizontal: hPad }]}>
 
         {/* ── Current detection ── */}
-        {currentDetection && <Text style={[styles.sectionHeading, { color: c.textSub }]}>ACTIVE DETECTION</Text>}
-        {currentDetection ? (() => {
+        {currentDetection && (() => {
           const conf = Math.round(currentDetection.confidence * 100);
           const barColor = confidenceColor(currentDetection.confidence);
-          return (
+          return (<>
+            <Text style={[styles.sectionHeading, { color: c.textSub }]}>ACTIVE DETECTION</Text>
             <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }, Shadow.sm]}>
               <View style={styles.cardTop}>
                 <Text style={[styles.cardName, { color: c.text }]} numberOfLines={1}>
@@ -218,8 +235,8 @@ export default function HomeScreen() {
               </View>
               <Text style={[styles.cardConf, { color: barColor }]}>{conf}% confidence</Text>
             </View>
-          );
-        })() : null}
+          </>);
+        })()}
 
         {/* ── Recent detections ── */}
         <Text style={[styles.sectionHeading, { color: c.textSub }]}>RECENT DETECTIONS</Text>

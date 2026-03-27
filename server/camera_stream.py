@@ -36,7 +36,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 SERVER_URL    = os.environ.get("IRIS_SERVER_URL",    "http://localhost:8000")
-TARGET_FPS    = float(os.environ.get("IRIS_TARGET_FPS",    "2.0"))
+TARGET_FPS    = float(os.environ.get("IRIS_TARGET_FPS",    "1.0"))
 JPEG_QUALITY  = int(os.environ.get("IRIS_JPEG_QUALITY",    "80"))
 FRAME_WIDTH   = int(os.environ.get("IRIS_FRAME_WIDTH",     "640"))
 FRAME_HEIGHT  = int(os.environ.get("IRIS_FRAME_HEIGHT",    "480"))
