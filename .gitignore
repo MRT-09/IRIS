@@ -1,36 +1,65 @@
+# Environment
 .env
 .env.local
+.env*.local
 
+# Python
 venv/
 env/
 ENV/
-
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
 
+# Logs & debug
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# OS
 .DS_Store
 .vscode/
 .idea/
 *.swp
 *.swo
 
-*.log
+# Build output
+dist/
+build/
+web-build/
+
+# Node
+node_modules/
+.npm
+package-lock.json
+
+# Client (Expo / React Native)
+client/.expo/
+expo-env.d.ts
+*.tsbuildinfo
+.metro-health-check*
+app-example
+client/ios
+client/android
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+
+# Database
 *.sqlite
 *.sqlite3
 
-dist/
-build/
-*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
-
-node_modules/
-.npm
-
+# Project-specific
 faces/
-
-
-package-lock.json
+server

@@ -26,19 +26,58 @@ def list_contacts():
 
 @contacts_bp.route("/", methods=["POST"])
 def create_contact():
+    import base64
+
     data = request.get_json(force=True)
     name = data.get("name", "").strip()
     if not name:
         return jsonify({"error": "name is required"}), 400
 
-    contact_id = str(uuid.uuid4())
+    contact_id = data.get("contact_id") or str(uuid.uuid4())
+    images_b64: list = data.get("images", [])
     now = datetime.utcnow()
-    contact = Contact(id=contact_id, name=name, created_at=now, updated_at=now)
-    db.session.add(contact)
-    db.session.commit()
 
-    os.makedirs(_contact_images_dir(contact_id), exist_ok=True)
-    return jsonify(contact.to_dict()), 201
+    contact = Contact.query.get(contact_id)
+    if contact:
+        contact.name = name
+        contact.updated_at = now
+    else:
+        contact = Contact(id=contact_id, name=name, created_at=now, updated_at=now)
+        db.session.add(contact)
+
+    images_dir = _contact_images_dir(contact_id)
+    os.makedirs(images_dir, exist_ok=True)
+
+    images_saved = 0
+    if images_b64:
+        # Replace existing images on re-sync
+        existing = ContactImage.query.filter_by(contact_id=contact_id).all()
+        for img in existing:
+            if os.path.exists(img.filepath):
+                os.remove(img.filepath)
+            db.session.delete(img)
+
+        for b64_str in images_b64:
+            try:
+                image_data = base64.b64decode(b64_str)
+                image_id = str(uuid.uuid4())
+                filepath = os.path.join(images_dir, f"{image_id}.jpg")
+                with open(filepath, "wb") as f:
+                    f.write(image_data)
+                db.session.add(ContactImage(
+                    id=image_id,
+                    contact_id=contact_id,
+                    filepath=filepath,
+                    uploaded_at=now,
+                ))
+                images_saved += 1
+            except Exception:
+                continue
+
+    db.session.commit()
+    result = contact.to_dict()
+    result["images_saved"] = images_saved
+    return jsonify(result), 201
 
 
 @contacts_bp.route("/<contact_id>", methods=["PUT"])

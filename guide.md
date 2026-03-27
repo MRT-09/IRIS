@@ -235,42 +235,6 @@ On detection event received:
 
 ---
 
-## Project Structure
-
-```
-iris/
-├── server/
-│   ├── app.py                  # Flask app entry point
-│   ├── config.py               # Configuration (thresholds, cooldown, etc.)
-│   ├── routes/
-│   │   ├── contacts.py         # Contact CRUD endpoints
-│   │   └── stream.py           # Frame receiving + processing
-│   ├── services/
-│   │   ├── face_recognition.py # Embedding generation + matching
-│   │   ├── cooldown.py         # Cooldown tracker
-│   │   └── event_emitter.py    # WebSocket event broadcasting
-│   ├── models/
-│   │   └── embedding_store.py  # Embedding persistence
-│   └── requirements.txt
-├── mobile/
-│   ├── src/
-│   │   ├── screens/            # App screens
-│   │   ├── components/         # Reusable UI components
-│   │   ├── services/
-│   │   │   ├── api.js          # Server communication
-│   │   │   ├── database.js     # SQLite operations
-│   │   │   ├── bluetooth.js    # Earbud detection
-│   │   │   └── tts.js          # Text-to-speech
-│   │   └── utils/
-│   └── package.json
-├── device/
-│   ├── stream.py               # Pi Zero camera streaming script
-│   └── config.py               # Device configuration (server URL, FPS, etc.)
-└── claude.md
-```
-
----
-
 ## Build Order
 
 1. **Server: Core face recognition pipeline** — Embedding model loading, face detection, embedding generation, nearest-neighbor matching.

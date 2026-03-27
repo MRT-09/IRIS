@@ -3,10 +3,8 @@ import type { AppSettings } from '../types';
 
 const SETTINGS_KEY = '@iris_settings';
 
-const _ip = process.env.EXPO_PUBLIC_SERVER_IP ?? '192.168.1.100';
-const _port = process.env.EXPO_PUBLIC_SERVER_PORT ?? '5000';
-
-export const DEFAULT_SERVER_URL = `http://${_ip}:${_port}`;
+export const DEFAULT_SERVER_URL =
+  process.env.EXPO_PUBLIC_DEVICE_SERVER_URL ?? 'http://192.168.1.100:8000';
 
 export const DEFAULT_SETTINGS: AppSettings = {
   serverUrl: DEFAULT_SERVER_URL,

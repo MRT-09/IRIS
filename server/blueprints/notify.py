@@ -1,15 +1,31 @@
+import json
 import queue
+import threading
 
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, stream_with_context
 
 notify_bp = Blueprint("notify", __name__)
 
-_push_tokens = {}
+_client_queues: list = []
+_queues_lock = threading.Lock()
+
+
+def broadcast(event: dict):
+    """Push a detection event to all connected SSE clients."""
+    data = json.dumps(event)
+    with _queues_lock:
+        for q in list(_client_queues):
+            try:
+                q.put_nowait(data)
+            except queue.Full:
+                pass
 
 
 @notify_bp.route("/events", methods=["GET"])
 def events():
-    client_queue = queue.Queue()
+    client_queue = queue.Queue(maxsize=20)
+    with _queues_lock:
+        _client_queues.append(client_queue)
 
     def generate():
         try:
@@ -22,7 +38,9 @@ def events():
         except GeneratorExit:
             pass
         finally:
-            pass
+            with _queues_lock:
+                if client_queue in _client_queues:
+                    _client_queues.remove(client_queue)
 
     return Response(
         stream_with_context(generate()),
@@ -32,16 +50,3 @@ def events():
             "X-Accel-Buffering": "no",
         },
     )
-
-
-@notify_bp.route("/register", methods=["POST"])
-def register_token():
-    data = request.get_json(force=True)
-    token = data.get("token", "").strip()
-    platform = data.get("platform", "").strip()
-
-    if not token or platform not in ("fcm", "webpush"):
-        return jsonify({"error": "token and platform (fcm|webpush) are required"}), 400
-
-    _push_tokens[token] = {"token": token, "platform": platform}
-    return jsonify({"status": "registered"}), 201
