@@ -108,7 +108,7 @@ All settings are controlled via environment variables:
 |---|---|---|
 | `IRIS_EMBEDDING_MODEL` | `insightface` | Face recognition backend (`insightface` or `face_recognition`) |
 | `IRIS_INFERENCE_INTERVAL_FRAMES` | `1` | Run inference every N frames |
-| `IRIS_DETECTION_COOLDOWN_SECONDS` | `3600` | Cooldown between repeated announcements per contact |
+| `IRIS_DETECTION_COOLDOWN_SECONDS` | `30` | Cooldown between repeated announcements per contact |
 | `IRIS_RECOGNITION_THRESHOLD` | `0.5` | Cosine distance threshold for a positive match |
 | `IRIS_DETECTION_CONFIDENCE` | `0.5` | Minimum face detection confidence score |
 | `IRIS_SERVER_URL` | `http://localhost:8000` | Server URL used by the camera streamer |
