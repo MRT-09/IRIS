@@ -9,8 +9,10 @@ from flask import g, current_app
 
 def get_db():
     if "db" not in g:
+        db_path = current_app.config["DATABASE"]
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
         g.db = sqlite3.connect(
-            current_app.config["DATABASE"],
+            db_path,
             detect_types=sqlite3.PARSE_DECLTYPES,
         )
         g.db.row_factory = sqlite3.Row
@@ -26,31 +28,53 @@ def close_db(e=None):
 
 
 def init_db(app):
-    app.config["DATABASE"] = os.path.join(app.instance_path, "iris.db")
+    app.config.setdefault("DATABASE", os.path.join(app.instance_path, "iris.db"))
     os.makedirs(app.instance_path, exist_ok=True)
     app.teardown_appcontext(close_db)
-    with app.app_context():
-        db = get_db()
-        db.executescript("""
+
+    conn = sqlite3.connect(app.config["DATABASE"])
+    try:
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS contacts (
                 id         TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
-            );
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS contact_images (
                 id          TEXT PRIMARY KEY,
                 contact_id  TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
                 image_data  BLOB NOT NULL,
                 uploaded_at TEXT NOT NULL
-            );
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS contact_embeddings (
                 id         TEXT PRIMARY KEY,
                 contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
                 embedding  BLOB NOT NULL
-            );
+            )
         """)
-        db.commit()
+        conn.commit()
+
+        # Migration: add image_id column if it does not exist yet
+        existing_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(contact_embeddings)").fetchall()
+        }
+        if "image_id" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE contact_embeddings ADD COLUMN image_id TEXT REFERENCES contact_images(id)"
+            )
+            conn.commit()
+
+        # Remove any embeddings that predate the migration (no image_id)
+        conn.execute("DELETE FROM contact_embeddings WHERE image_id IS NULL")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def create_contact(id, name):
@@ -128,15 +152,33 @@ def list_image_records(contact_id):
     return [dict(r) for r in rows]
 
 
-def save_embeddings(contact_id, embeddings):
-    db = get_db()
-    db.execute("DELETE FROM contact_embeddings WHERE contact_id = ?", (contact_id,))
-    for emb in embeddings:
-        db.execute(
-            "INSERT INTO contact_embeddings (id, contact_id, embedding) VALUES (?, ?, ?)",
-            (str(uuid.uuid4()), contact_id, emb.astype(np.float32).tobytes()),
-        )
-    db.commit()
+def save_embedding(contact_id: str, image_id: str, embedding: np.ndarray):
+    """Store a single embedding linked to a specific source image."""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO contact_embeddings (id, contact_id, image_id, embedding) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), contact_id, image_id, embedding.astype(np.float32).tobytes()),
+    )
+    conn.commit()
+
+
+def get_processed_image_ids(contact_id: str) -> set:
+    """Return the set of image IDs that already have a stored embedding."""
+    rows = get_db().execute(
+        "SELECT image_id FROM contact_embeddings WHERE contact_id = ? AND image_id IS NOT NULL",
+        (contact_id,),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def get_image(image_id: str):
+    """Fetch the raw image blob for a single image record."""
+    row = get_db().execute(
+        "SELECT image_data FROM contact_images WHERE id = ?", (image_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
 
 
 def delete_embeddings(contact_id):

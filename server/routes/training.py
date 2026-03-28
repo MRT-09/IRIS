@@ -18,28 +18,37 @@ def submit_training():
     errors = []
 
     for contact in contacts:
-        blobs = db.get_images(contact["id"])
-        images = []
-        for blob in blobs:
+        image_records = db.list_image_records(contact["id"])
+        if not image_records:
+            continue
+
+        processed_ids = db.get_processed_image_ids(contact["id"])
+
+        for record in image_records:
+            if record["id"] in processed_ids:
+                continue
+
+            blob = db.get_image(record["id"])
+            if blob is None:
+                continue
+
             arr = np.frombuffer(blob, dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is not None:
-                images.append(img)
+            if img is None:
+                errors.append(f"{contact['name']} image {record['id']}: could not decode")
+                continue
 
-        if not images:
-            errors.append(f"{contact['name']}: no readable images")
-            continue
+            try:
+                embeddings = pipeline.generate_embeddings([img])
+            except Exception as e:
+                errors.append(f"{contact['name']} image {record['id']}: pipeline error — {e}")
+                continue
 
-        try:
-            embeddings = pipeline.generate_embeddings(images)
-        except Exception as e:
-            errors.append(f"{contact['name']}: pipeline error — {e}")
-            continue
-        if embeddings:
-            db.save_embeddings(contact["id"], embeddings)
-            total += len(embeddings)
-        else:
-            errors.append(f"{contact['name']}: no faces detected")
+            if embeddings:
+                db.save_embedding(contact["id"], record["id"], embeddings[0])
+                total += 1
+            else:
+                errors.append(f"{contact['name']} image {record['id']}: no face detected")
 
     return jsonify({
         "status": "trained",

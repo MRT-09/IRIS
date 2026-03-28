@@ -29,6 +29,7 @@ def create_contact():
 
     images_saved = 0
     if images_b64:
+        db.delete_embeddings(contact_id)
         db.delete_images(contact_id)
         for b64_str in images_b64:
             try:
