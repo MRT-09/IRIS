@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 
 import cv2
 import numpy as np
-
 from flask import Blueprint, Response, current_app, request, stream_with_context
 
+import db
+import pipeline
 from config import INFERENCE_INTERVAL_FRAMES
 
 stream_bp = Blueprint("stream", __name__)
@@ -43,11 +44,9 @@ def get_latest_inference_frame() -> bytes | None:
 
 @stream_bp.route("/push", methods=["POST"])
 def push_stream():
-    from blueprints.notify import broadcast
+    from routes.notify import broadcast
 
-    pipeline = current_app.extensions.get("iris_pipeline")
     cooldown = current_app.extensions.get("iris_cooldown")
-
     frame_counter = 0
     buf = b""
 
@@ -65,22 +64,23 @@ def push_stream():
                 buf = buf[start:]
                 break
 
-            frame_bytes = buf[start: end + 2]
+            frame_bytes = buf[start:end + 2]
             buf = buf[end + 2:]
 
             _set_latest_frame(frame_bytes)
 
             frame_counter += 1
-            if frame_counter % INFERENCE_INTERVAL_FRAMES == 0 and pipeline and cooldown:
+            if frame_counter % INFERENCE_INTERVAL_FRAMES == 0 and cooldown:
                 try:
                     arr = np.frombuffer(frame_bytes, dtype=np.uint8)
                     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                     _set_latest_inference_frame(frame_bytes)
                     if frame is not None:
-                        detections = pipeline.process_frame(frame)
+                        all_embeddings = db.get_all_embeddings()
+                        detections = pipeline.process_frame(frame, all_embeddings)
                         detections = cooldown.filter_detections(detections)
                         if detections:
-                            event = {
+                            broadcast({
                                 "type": "contact_detected",
                                 "contacts": [
                                     {
@@ -91,8 +91,7 @@ def push_stream():
                                     for d in detections
                                 ],
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                            }
-                            broadcast(event)
+                            })
                 except Exception:
                     pass
 
@@ -101,7 +100,6 @@ def push_stream():
 
 @stream_bp.route("/inference_frame", methods=["GET"])
 def inference_frame():
-    """Return the latest frame that was sent to the inference pipeline as a JPEG."""
     frame = get_latest_inference_frame()
     if frame is None:
         return "", 204

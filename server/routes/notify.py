@@ -11,7 +11,6 @@ _queues_lock = threading.Lock()
 
 
 def broadcast(event: dict):
-    """Push a detection event to all connected SSE clients."""
     data = json.dumps(event)
     with _queues_lock:
         for q in list(_client_queues):

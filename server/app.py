@@ -1,72 +1,60 @@
 import os
 import sys
+import threading
+import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, jsonify
 
-from config import CONTACTS_DIR, DATA_DIR, DETECTION_COOLDOWN_SECONDS
-from models.db import init_db
-from blueprints.contacts import contacts_bp
-from blueprints.training import training_bp
-from blueprints.stream import stream_bp
-from blueprints.notify import notify_bp
+import db
+from config import DETECTION_COOLDOWN_SECONDS
+from routes.contacts import contacts_bp
+from routes.training import training_bp
+from routes.stream import stream_bp
+from routes.notify import notify_bp
 
 
-def _startup_sync(app, store, pipeline):
-    """
-    Reconcile the embedding store with the database on every startup.
+class CooldownTracker:
+    def __init__(self, cooldown_seconds=DETECTION_COOLDOWN_SECONDS):
+        self._cooldown = cooldown_seconds
+        self._last_announced: dict[str, float] = {}
+        self._lock = threading.Lock()
 
-    1. Remove embeddings for contacts that no longer exist in the DB
-       (handles contacts deleted while the server was down).
-    2. Auto-retrain from DB images if the store is empty but the DB has
-       contacts (handles deleted pickle, first run after data import, etc.).
-    """
-    import cv2
-    from models.contact import Contact, ContactImage
+    def is_in_cooldown(self, contact_id: str) -> bool:
+        with self._lock:
+            last = self._last_announced.get(contact_id)
+            if last is None:
+                return False
+            return (time.time() - last) < self._cooldown
 
-    with app.app_context():
-        db_contacts = {c.id: c for c in Contact.query.all()}
-        store_ids   = {e["contact_id"] for e in store.list_contacts()}
+    def mark_announced(self, contact_id: str):
+        with self._lock:
+            self._last_announced[contact_id] = time.time()
 
-        # 1. Purge embeddings for contacts no longer in DB
-        for stale_id in store_ids - db_contacts.keys():
-            store.remove_contact(stale_id)
+    def filter_detections(self, detections: list[dict]) -> list[dict]:
+        active = []
+        for det in detections:
+            cid = det["contact_id"]
+            if not self.is_in_cooldown(cid):
+                self.mark_announced(cid)
+                active.append(det)
+        return active
 
-        # 2. Auto-retrain if store is now empty but DB has contacts
-        if db_contacts and not store.list_contacts():
-            for contact in db_contacts.values():
-                images = []
-                for record in ContactImage.query.filter_by(contact_id=contact.id).all():
-                    if os.path.exists(record.filepath):
-                        img = cv2.imread(record.filepath)
-                        if img is not None:
-                            images.append(img)
-                if images:
-                    embeddings = pipeline.generate_embeddings(images)
-                    if embeddings:
-                        store.add_contact(contact.id, contact.name, embeddings)
+    def reset(self, contact_id: str | None = None):
+        with self._lock:
+            if contact_id:
+                self._last_announced.pop(contact_id, None)
+            else:
+                self._last_announced.clear()
 
 
 def create_app():
     app = Flask(__name__)
 
-    init_db(app)
+    db.init_db(app)
 
-    os.makedirs(DATA_DIR, exist_ok=True)
-    os.makedirs(CONTACTS_DIR, exist_ok=True)
-
-    from core.models.embedding_store import EmbeddingStore
-    from core.services.face_recognition import FaceRecognitionPipeline
-    from core.services.cooldown import CooldownTracker
-
-    store    = EmbeddingStore()
-    pipeline = FaceRecognitionPipeline(store)
-    cooldown = CooldownTracker(cooldown_seconds=DETECTION_COOLDOWN_SECONDS)
-
-    app.extensions["iris_store"]    = store
-    app.extensions["iris_pipeline"] = pipeline
-    app.extensions["iris_cooldown"] = cooldown
+    app.extensions["iris_cooldown"] = CooldownTracker()
 
     @app.route("/")
     def health():
@@ -76,8 +64,6 @@ def create_app():
     app.register_blueprint(training_bp, url_prefix="/api/training")
     app.register_blueprint(stream_bp,   url_prefix="/api/stream")
     app.register_blueprint(notify_bp,   url_prefix="/api/notify")
-
-    _startup_sync(app, store, pipeline)
 
     return app
 
